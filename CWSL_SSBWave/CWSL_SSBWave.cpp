@@ -156,7 +156,8 @@ int main(int argc, char **argv)
 
 
     // Create AutoAF. Only used if SF == -1
-    AutoScaleAF<float> af(2, wave.getClipValue());
+    const size_t headroomdB = 16;
+    AutoScaleAF<float> af(headroomdB, wave.getClipValue());
 
     float scaleFactor = 0;
     float lastScaleFactor = 0;
