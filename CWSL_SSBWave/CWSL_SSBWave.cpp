@@ -82,11 +82,11 @@ int main(int argc, char **argv)
     if (argc < 4) {
         // print usage
         std::cout << "Not enough input arguments!" << std::endl;
-        std::cout << "Usage: CWSL_SSBWave FreqHz WaveOutNr Scale_factor SSB_LSB" << std::endl;
+        std::cout << "Usage: CWSL_SSBWave FreqHz WaveOutNr SSB_LSB Scale_factor" << std::endl;
         std::cout << "    FreqHz is the frequency in Hz" << std::endl
                   << "    WaveOutNr is the Wave Out device number or name" << std::endl
-                  << "    Scale_factor is -1 for Auto-Scaling" << std::endl
-                  << "    SSB_LSB is 1 for Upper Sideband, 0 for Lower Sideband" << std::endl;
+                  << "    SSB_LSB is 1 for Upper Sideband, 0 for Lower Sideband" << std::endl
+                  << "    Scale_factor is -1 for Auto-Scaling" << std::endl;
         std::cout << std::endl; //blank line           
         // print the list of WaveOut devices
         const size_t numDevs = wave.getNumDevices();
@@ -216,7 +216,7 @@ int main(int argc, char **argv)
     Upsampler<float> upsamp(3); //2^3=8 ratio
     const size_t upsamp_ratio = upsamp.GetRatio();
     std::cout << "Upsampling wave audio from " << SSB_SR << " Hz to " << Wave_SR << " Hz" << std::endl;
-    if (upsamp_ratio != Wave_SR/ SSB_SR) {
+    if (upsamp_ratio != Wave_SR / SSB_SR) {
         std::cout << "Unsupported wave output sample rate" << std::endl;
         SM.Close();
         return EXIT_FAILURE;
@@ -231,7 +231,7 @@ int main(int argc, char **argv)
     //  Main Loop
     //
 
-    std::vector<float> af6khz(iq_len / decRatio, 0);
+    std::vector<float> af6khz(iq_len / decRatio, 0.0);
     std::vector<float> af48khz(iq_len * upsamp_ratio / decRatio, 0.0);
 
     std::vector<float> samples;
