@@ -15,9 +15,10 @@ class AutoScaleAF{
             
         // headroomdB specifies the ideal headroom in dB to maintain
         // maxVal specifies the max. e.g., a value that represents a clipped value
-        AutoScaleAF(const T headroomdB, const T maxVal) : 
+        AutoScaleAF(const T headroomdB, const T maxVal, const size_t numSamplesBeforeIncrease) :
             mScaleFactor(0),
             mHeadroomdB(headroomdB),
+            mMinSamplesBeforeIncrease(numSamplesBeforeIncrease),
             mSinceDecrease(0) {
                 
             mMaxdB = v_to_db(maxVal);
@@ -50,12 +51,12 @@ class AutoScaleAF{
             else {
                 const size_t numGT = num_greater_than_abs(v, mThreshV / mScaleFactor);
                 const T percentGT = static_cast<T>(numGT) / static_cast<T>(v.size());
-                mSinceDecrease++;
+                mSinceDecrease += v.size();
                 if (percentGT >= 0.025){
                     mScaleFactor *= mAmountDecrease;
                     mSinceDecrease = 0;
                 }
-                else if ((percentGT <= 0.65) && (mSinceDecrease > 1000)){
+                else if ((percentGT <= 0.50) && (mSinceDecrease >= mMinSamplesBeforeIncrease)){
                     mScaleFactor *= mAmountIncrease;
                 }
             }
@@ -78,7 +79,9 @@ class AutoScaleAF{
             }
             return count;
         }
-       
+
+
+        size_t mMinSamplesBeforeIncrease;
         T mScaleFactor;
         T mHeadroomdB;
         T mMaxdB;
@@ -87,5 +90,4 @@ class AutoScaleAF{
         T mAmountDecrease;
         T mAmountIncrease;
         size_t mSinceDecrease;
-        
  };

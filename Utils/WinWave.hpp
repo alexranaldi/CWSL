@@ -10,7 +10,6 @@
 // Windows audio device API
 #include <mmsystem.h>
 
-
 // A simple class to encapsulate writing to Wave Out devices. This was
 //  developed for writing demodulated audio from a Software Defined Radio 
 //  receiver to Virtual Audio Cables.
@@ -39,13 +38,15 @@ class WinWave {
     bool initialize(const size_t devNum, const uint64_t Fs, const size_t bufferLen);
     
     // Writes audio samples to the Wave Out audio device
-    bool write(float* samples, const size_t numSamples, const float scaleFactor);
+    bool write(float* samples, const size_t numSamples);
 
     void stop();
     
     void enablePrintClipped();
 
-    size_t getClipValue();
+    float getClipValue() const;
+
+    size_t getBitsPerSample() const;
 
 protected:
 
@@ -65,15 +66,21 @@ private:
 
     bool mInitialized;
     bool mPrintClipped;
+
+    size_t mBitsPerSample;
+    float mClipValue;
+
     
     // Number of internal buffers. Each buffer has length mBufferLen (in units of samples)
-	static constexpr size_t NUM_BUFFERS = 64;
+    static constexpr size_t NUM_BUFFERS = 64;
     // Number of bits per audio sample
-    static constexpr size_t BITS_PER_SAMPLE = 32;
     // Number of channels. 1 for Mono
-	static constexpr size_t NUM_CHANNELS = 1;
+    static constexpr size_t NUM_CHANNELS = 1;
     // Maximum value represented at Sample Rate=BITS_PER_SAMPLE
     // Minimum value is -MAX_VAL
-	static constexpr int32_t MAX_VAL = 2147483647; // 2^(32-1)-1
+    static constexpr int32_t MAX_VAL = 2147483647; // 2^(32-1)-1
+
+    void allocBuffers(const size_t bufferLen);
+    bool openWaveDevice(const size_t devNum, const uint64_t Fs, const size_t bitsPerSample);
 
 };

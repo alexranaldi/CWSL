@@ -15,6 +15,9 @@
 #include <string>
 #include <cstdint>
 #include <vector>
+#include <thread>
+#include <chrono>
+#include <atomic>
 
 #include "../Utils/SharedMemory.h"
 
@@ -33,6 +36,169 @@
 // Prefix and suffix for the shared memories names
 const std::string gPreSM = "CWSL";
 std::string gPostSM = "Band";
+
+std::atomic_bool terminateFlag;
+
+// Used internally as a single producer single consumer queue (ring buffer)
+template <typename T>
+struct ring_buffer_t {
+    T* recs;
+    // Use atomics for indices to prevent instruction reordering
+    std::atomic_int read_index;
+    std::atomic_int write_index;
+    // Number of items the ring buffer can hold.
+    size_t size;
+};
+
+template <typename T>
+bool initialize(ring_buffer_t<T>& buf, const size_t size) {
+    buf.read_index = 0;
+    buf.write_index = 0;
+    buf.size = size;
+    buf.recs = reinterpret_cast<T*>(malloc(sizeof(T) * buf.size));
+    return (buf.recs != nullptr);
+}
+
+template <typename T>
+bool wait_for_empty_slot(ring_buffer_t<T>& buf) {
+    while ((buf.read_index == buf.write_index + 1) || (buf.read_index == 0 && buf.write_index == buf.size - 1)) {
+        std::this_thread::sleep_for(std::chrono::microseconds(250));
+        if (terminateFlag) {
+            return false;
+        }
+    }
+    return true;
+}
+
+template <typename T>
+void inc_write_index(ring_buffer_t<T>& buf) {
+    if (buf.write_index == buf.size - 1) {
+        buf.write_index = 0;
+    }
+    else {
+        buf.write_index++;
+    }
+}
+
+template <typename T>
+T pop(ring_buffer_t<T>& buf) {
+    wait_for_data(buf);
+    T curr = buf.recs[buf.read_index];
+    if (buf.read_index == buf.size - 1) {
+        buf.read_index = 0;
+    }
+    else {
+        buf.read_index++;
+    }
+    return curr;
+}
+
+template <typename T>
+bool wait_for_data(ring_buffer_t<T>& buf) {
+    while (buf.read_index == buf.write_index) {
+        std::this_thread::sleep_for(std::chrono::microseconds(250));
+        if (terminateFlag) {
+            return false;
+        }
+    }
+    return true;
+}
+
+ring_buffer_t<std::complex<float>*> iq_buffer;
+ring_buffer_t<float*> af_buffer;
+
+int SF = 16;
+
+void readIQ(CSharedMemory &SM, const size_t iq_len) {
+
+    while (!terminateFlag) {
+    
+        // wait for new data from receiver. Blocks until data received
+        SM.WaitForNewData();
+        
+        // wait for a slot to be ready in the buffer. Blocks until slot available.
+        if (!wait_for_empty_slot(iq_buffer)) {
+            return;
+        }
+
+        std::complex<float>* iq_data_f = iq_buffer.recs[iq_buffer.write_index];
+
+        // read block of data from receiver
+        const bool readSuccess = SM.Read((PBYTE)iq_data_f, iq_len * sizeof(std::complex<float>));
+        if (!readSuccess) {
+            std::cout << "Did not read any I/Q data" << std::endl;
+            continue;
+        }
+
+
+        inc_write_index(iq_buffer);
+        
+    }
+}
+
+void demodulate(SSBD<float>& ssbd, Upsampler<float>& upsamp, AutoScaleAF<float>& af, const size_t iq_len, const size_t decRatio) {
+    // Demodulate IQ for SSB
+
+    const size_t ssbd_in_size = ssbd.GetInSize();
+    const size_t upsamp_ratio = upsamp.GetRatio();
+
+    std::vector<float> af6khz(iq_len / decRatio, 0.0);
+
+    const size_t n48khz = iq_len * upsamp_ratio / decRatio;
+
+    float scaleFactor = static_cast<float>(pow(SF, 2));
+    float lastScaleFactor = 0;
+
+    while (!terminateFlag) {
+        // wait for available memory to write audio data to
+        if (!wait_for_empty_slot(af_buffer)) {
+            return;
+        }
+        // get IQ data
+        std::complex<float> *xc = pop(iq_buffer);
+        // The audio data we're going to write to
+        float* af48khz = af_buffer.recs[af_buffer.write_index];
+
+        for (size_t n = 0; n < iq_len; n += ssbd_in_size) {
+            ssbd.Iterate(xc + n, af6khz.data() + n / decRatio);
+        }
+
+        // Upsample 6kHz audio to 48khz
+        for (size_t n = 0; n < af6khz.size(); ++n) {
+            upsamp.Iterate(af6khz.data() + n, af48khz + n * upsamp_ratio);
+        }
+
+        // If auto AF is enabled
+        if (-1 == SF) {
+            std::vector<float> afSamples(af48khz, af48khz + n48khz);
+            scaleFactor = af.getScaleFactor(afSamples);
+            if (scaleFactor != lastScaleFactor) {
+                std::cout << "Scale factor set to: " << scaleFactor << std::endl;
+                lastScaleFactor = scaleFactor;
+            }
+        }
+        for (size_t n = 0; n < n48khz; ++n) {
+            af48khz[n] *= scaleFactor;
+        }
+        // AF write complete
+        inc_write_index(af_buffer);
+
+    }
+}
+
+void writeAudio(WinWave& wave, const size_t len) {
+
+    while (!terminateFlag){
+        // get af data
+        float* af = pop(af_buffer);
+        // write data to wave device
+        const bool writeSuccess = wave.write(af, len);
+        if (!writeSuccess) {
+            std::cout << "Failed to write to audio device" << std::endl;
+        }
+    }
+
+}
 
 //////////////////////////////////////////////////////////////////////////////
 // Find the right band
@@ -72,9 +238,10 @@ int main(int argc, char **argv)
 {
     CSharedMemory SM;
     SM_HDR *SHDR;
-    int SF = 16;
     int nMem = 0;
     size_t nWO = 0;
+
+    terminateFlag = false;
 
     WinWave wave = WinWave();
 
@@ -135,10 +302,10 @@ int main(int argc, char **argv)
         SF = -1;
     }
     if (-1 == SF) {
-        std::cout << "Using automatic scale factor" << std::endl;
+        std::cout << "Using automatic scale factor." << std::endl;
     }
     else {
-        std::cout << "Using scale factor: " << SF << std::endl;
+        std::cout << "Using user-specified scale factor: " << SF << std::endl;
     }
 
     // USB/LSB.  USB = 1, LSB = 0
@@ -148,46 +315,37 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
     if (USB) {
-        std::cout << "Demodulating Upper Sideband" << std::endl;
+        std::cout << "Demodulating Upper Sideband." << std::endl;
     }
     else {
-        std::cout << "Demodulating Lower Sideband" << std::endl;
+        std::cout << "Demodulating Lower Sideband." << std::endl;
     }
 
-
-    // Create AutoAF. Only used if SF == -1
-    const size_t headroomdB = 16;
-    AutoScaleAF<float> af(headroomdB, wave.getClipValue());
-
-    float scaleFactor = 0;
-    float lastScaleFactor = 0;
-    if (SF >= 0) {
-        // User defined scale factor
-        scaleFactor = pow(2, SF);
-    }
-
+    //
+    // Setup shared memory and receiver interface
+    //
+   
     // create name of shared memory
     const std::string name = gPreSM + std::to_string(nMem) + gPostSM;
-
     // try to open shared memory
     if (!SM.Open(name.c_str())) {
         fprintf(stderr, "Can't open shared memory for %d receiver\n", nMem);
         return EXIT_FAILURE;
     }
-
     // get info about channel
     SHDR = SM.GetHeader();
     const size_t SR = static_cast<size_t>(SHDR->SampleRate);
     const int BIS = SHDR->BlockInSamples;
-
     std::cout << "Receiver: " << nMem
         << "\tSample Rate: " << SR
         << "\tBlock In Samples: " << BIS
         << "\tLO: " << SHDR->L0
         << std::endl;
 
-    // Create the demodulator
-
+    //
+    // Create the SSB demodulator
+    //
+  
     const size_t SSB_BW = 3000;
     std::cout << "SSB Bandwidth: " << SSB_BW << " Hz" << std::endl;
     // F is always Fc-LO
@@ -196,124 +354,123 @@ int main(int argc, char **argv)
     SSBD<float> ssbd(SR, SSB_BW, static_cast<float>(F), static_cast<bool>(USB));
     const size_t SSB_SR = ssbd.GetOutRate();
     const size_t decRatio = SR / SSB_SR;
-    const size_t ssbd_in_size = ssbd.GetInSize();
 
-    // try to open waveout device
+    //
+    // Create the UpSampler
+    //
+
+    Upsampler<float> upsamp(3); //2^3=8 ratio
     const size_t Wave_SR = 48000;
-    std::cout << "WaveOut Sample Rate=" << Wave_SR << std::endl;
-    std::cout << "WaveOut Output Size=" << ssbd.GetOutSize() << std::endl;
+    std::cout << "Upsampling audio from " << SSB_SR << " Hz to " << Wave_SR << " Hz" << std::endl;
+    const size_t upsamp_ratio = upsamp.GetRatio();
+    if (upsamp_ratio != Wave_SR / SSB_SR) {
+        std::cout << "UpSampler does not support the specified wave output sample rate" << std::endl;
+        SM.Close();
+        return EXIT_FAILURE;
+    }
 
-    const float WAVE_BUFFER_TIME = 0.050;
-    const size_t WAVE_BUFFER_LEN = static_cast<float>(Wave_SR) * WAVE_BUFFER_TIME; // WAVE_BUFFER_LEN is in samples
-    std::cout << "Wave buffer length is " << WAVE_BUFFER_TIME << " seconds (" << WAVE_BUFFER_LEN << " samples)" << std::endl;
-    const bool waveInitialized = wave.initialize(nWO, Wave_SR, WAVE_BUFFER_LEN);
+    // 
+    // Open WinWave (audio device)
+    //
+
+    const size_t iq_len = BIS;
+    const size_t af_len = iq_len * upsamp_ratio / decRatio;
+    std::cout << "Audio Device Sample Rate=" << Wave_SR << std::endl;
+    const bool waveInitialized = wave.initialize(nWO, Wave_SR, af_len);
     if (!waveInitialized) {
         std::cout << "Failed to open and start wave device." << std::endl;
         SM.Close();
         return EXIT_FAILURE;
     }
+    const float waveBPS = wave.getBitsPerSample();
+    std::cout << "Audio Device bits per sample=" << waveBPS << std::endl;
 
-    Upsampler<float> upsamp(3); //2^3=8 ratio
-    const size_t upsamp_ratio = upsamp.GetRatio();
-    std::cout << "Upsampling wave audio from " << SSB_SR << " Hz to " << Wave_SR << " Hz" << std::endl;
-    if (upsamp_ratio != Wave_SR / SSB_SR) {
-        std::cout << "Unsupported wave output sample rate" << std::endl;
-        SM.Close();
-        return EXIT_FAILURE;
+
+
+    //
+    // Create AutoAF. Only used if SF == -1
+    //
+
+    const size_t headroomdB = 16;
+    const size_t numSampBeforeAfInc = Wave_SR * 10; // 10s of samples
+    AutoScaleAF<float> af(headroomdB, wave.getClipValue(), numSampBeforeAfInc);
+
+
+
+    //
+    // Prepare circular buffers
+    // 
+
+    initialize(iq_buffer, 1024);
+    for (size_t k = 0; k < iq_buffer.size; ++k) {
+        iq_buffer.recs[k] = reinterpret_cast<std::complex<float>*>( malloc( sizeof(std::complex<float>) * iq_len ) );
+    }
+    initialize(af_buffer, 1024);
+    for (size_t k = 0; k < af_buffer.size; ++k) {
+        af_buffer.recs[k] = reinterpret_cast<float*>( malloc( sizeof(float) * af_len) );
     }
 
-    std::cout << std::endl << "Press Q to terminate" << std::endl;
+    //
+    //  Start Threads
+    //
 
-    const size_t iq_len = BIS;
-    float* iq_data_f = reinterpret_cast<float*>(malloc(iq_len * 2 * sizeof(float)));
-
+    
+    std::thread iqThread = std::thread(readIQ, std::ref(SM), BIS);
+    std::thread demodThread = std::thread(&demodulate, std::ref(ssbd), std::ref(upsamp), std::ref(af), BIS, decRatio);
+    std::thread audioThread = std::thread(&writeAudio, std::ref(wave), af_len);
+    
     //
     //  Main Loop
     //
 
-    std::vector<float> af6khz(iq_len / decRatio, 0.0);
-    std::vector<float> af48khz(iq_len * upsamp_ratio / decRatio, 0.0);
-
-    std::vector<float> samples;
-    samples.reserve(WAVE_BUFFER_LEN); // vector might grow beyond this
-
-    bool terminate = false;
-
-    while (!terminate) {
-        // wait for new data. Blocks until data received
-        SM.WaitForNewData();
-
-        // read block of data from receiver
-
-        const bool readSuccess = SM.Read((PBYTE)iq_data_f, iq_len * 2 * sizeof(float));
-        if (!readSuccess) {
-            std::cout << "Did not read any I/Q data" << std::endl;
-            continue;
-        }
-
-        // Create complex from IQ
-        std::complex<float> *xc = (std::complex<float>*)(iq_data_f);
-
-        // Demodulate IQ for SSB
-        for (size_t n = 0; n < iq_len; n += ssbd_in_size) {
-            ssbd.Iterate(xc + n, af6khz.data() + n / decRatio);
-        }
-
-        // Upsample 6kHz audio to 48khz
-        for (size_t n = 0; n < af6khz.size(); ++n) {
-            upsamp.Iterate(af6khz.data() + n, af48khz.data() + n * upsamp_ratio);
-        }
-
-        // buffer the 48khz audio
-        const size_t numWaveSamp = af48khz.size();
-        for (size_t n = 0; n < numWaveSamp; ++n) {
-            samples.push_back(af48khz[n]);
-        }
-
-        size_t numBufferedSamples = samples.size();
-        // Write audio samples to waveout when we have enough
-        if (numBufferedSamples >= WAVE_BUFFER_LEN) {
-            size_t numSamplesToWrite = numBufferedSamples;
-            // make sure we don't write more than WAVE_BUFFER_LEN samples
-            if (numBufferedSamples > WAVE_BUFFER_LEN) {
-                numSamplesToWrite = WAVE_BUFFER_LEN;
-            }
-
-            // If auto AF is enabled
-            if (-1 == SF) {
-                scaleFactor = af.getScaleFactor(samples);
-                if (scaleFactor != lastScaleFactor) {
-                    std::cout << "Scale factor changed to " << scaleFactor << std::endl;
-                    lastScaleFactor = scaleFactor;
-                }
-            }
-
-            const bool writeSuccess = wave.write(samples.data(), numSamplesToWrite, scaleFactor);
-
-            // Remove written samples
-            if (numSamplesToWrite == numBufferedSamples) {
-                // Entire vector was written, so clear all
-                samples.clear();
-            }
-            else {
-                // Partial vector write. Remove written samples only
-                samples.erase(samples.begin(), samples.begin() + numSamplesToWrite);
-            }
-        }
-
+    std::cout << std::endl << "Main loop started! Press Q to terminate." << std::endl;
+    while (!terminateFlag) {
         // Was Exit requested?
         if (_kbhit()) {
             const char ch = _getch();
             if (ch == 'Q' || ch == 'q') {
                 std::cout << "Q pressed, so terminating" << std::endl;
-                terminate = true;
+                terminateFlag = true;
             }
         }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 
-    return EXIT_SUCCESS;
+    //
+    // Join all threads
+    //
+    
+    if (audioThread.joinable()) {
+        audioThread.join();
+    }
+    if (demodThread.joinable()) {
+        demodThread.join();
+    }
+    if (iqThread.joinable()) {
+        iqThread.join();
+    }
+    
+
+
+    //
+    //  Clean up
+    //
 
     wave.stop();
     SM.Close();
-    free(iq_data_f);
-}
+
+    std::cout << "Deallocating memory..." << std::endl;
+
+    // free all allocated memory
+    for (size_t k = 0; k < af_buffer.size; ++k) {
+        free(af_buffer.recs[k]);
+    }
+    for (size_t k = 0; k < iq_buffer.size; ++k) {
+        free(iq_buffer.recs[k]);
+    }
+    free(af_buffer.recs);
+    free(iq_buffer.recs);
+
+    return EXIT_SUCCESS;
+
+}    

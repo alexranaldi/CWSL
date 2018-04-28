@@ -6,6 +6,7 @@
 #include <string>
 #include <iostream>
 #include <limits>
+#include <cmath>
 
 #include <Windows.h>
 
@@ -16,6 +17,8 @@
 WinWave::WinWave() : 
     mInitialized(false),
     mFs(0),
+    mBitsPerSample(0),
+    mClipValue(0),
     mPrintClipped(false) {
     mBuffers.resize(NUM_BUFFERS);
     mHeaders.resize(NUM_BUFFERS);
@@ -26,54 +29,78 @@ WinWave::~WinWave() {
 }
 
 bool WinWave::initialize(const size_t devNum, const uint64_t Fs, const size_t bufferLen) {
-
     // if already initialized
     if (mInitialized) {
         return false;
     }
 
-    // Sample rate in Hz
-    mFs = Fs;
-    // Device Id for the Wave Out device
-    mDevNum = devNum;
-    // Number of samples that will be passed per call to write()
-    mBufferLen = bufferLen;
+    bool success = false;
+    size_t bitsPerSample = 32;
+    while ( (!success) && (bitsPerSample >= 8) ){
+        success = openWaveDevice(devNum, Fs, bitsPerSample);
+        if (!success) {
+            bitsPerSample -= 8;
+        }
+    }
+        
+    // Was the device initialized?
+    if (success) {
+        allocBuffers(bufferLen);
+        mInitialized = true;
+        mClipValue = static_cast<float>(std::pow(2, bitsPerSample - 1) - 1);
+        return true;
+    }
+    
+    // Device not opened
+    return false;
+}
 
+size_t WinWave::getBitsPerSample() const{
+    return mBitsPerSample;
+}
+
+void WinWave::allocBuffers(const size_t bufferLen) {
+    mBufferLen = bufferLen;
+    for (size_t k = 0; k < NUM_BUFFERS; ++k) {
+        mBuffers[k] = (int32_t*)malloc(sizeof(int32_t) * mBufferLen);
+    }
+    mBufferIndex = 0;
+}
+
+bool WinWave::openWaveDevice(const size_t devNum, const uint64_t Fs, const size_t bitsPerSample) {
+    bool initialized = false;
+   
     WAVEFORMATEX format;
 
     format.wFormatTag = WAVE_FORMAT_PCM;
     format.nChannels = NUM_CHANNELS;
-    format.nSamplesPerSec = Fs;
-    format.wBitsPerSample = BITS_PER_SAMPLE;
+    format.nSamplesPerSec = static_cast<DWORD>(Fs);
+    format.wBitsPerSample = static_cast<WORD>(bitsPerSample);
     // nBlockAlign = num chans * bits/sample / 8, per Microsoft doc
-    format.nBlockAlign = format.nChannels * format.wBitsPerSample / 8; 
+    format.nBlockAlign = format.nChannels * format.wBitsPerSample / 8;
     format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
     format.cbSize = 0; // ignored
 
     // Open the Wave Out audio device
     const MMRESULT res = waveOutOpen(&mWaveOut, devNum, &format, NULL, NULL, CALLBACK_NULL);
-    mInitialized = res == MMSYSERR_NOERROR;
-    // Was the device initialized?
-    if (mInitialized) {
-        // Initialization OK, so Allocate buffers
-        for (size_t k = 0; k < NUM_BUFFERS; ++k) {
-            mBuffers[k] = (int32_t*)malloc(sizeof(int32_t) * mBufferLen);
-        }
-        mBufferIndex = 0;
+    initialized = res == MMSYSERR_NOERROR;
+    if (initialized) {
+        mFs = Fs;
+        mDevNum = devNum;
+        mBitsPerSample = bitsPerSample;
     }
-    return mInitialized;
+    return initialized;
 }
 
-size_t WinWave::getClipValue() {
-    // Wrap with parens to prevent macro expansion
-    return static_cast<size_t>((std::numeric_limits<int32_t>::max)());
+float WinWave::getClipValue() const{
+    return mClipValue;
 }
 
 void WinWave::enablePrintClipped(){
     mPrintClipped = true;
 }
 
-bool WinWave::write(float* samples, const size_t numSamples, const float scaleFactor) {
+bool WinWave::write(float* samples, const size_t numSamples) {
 
     if (numSamples > mBufferLen) {
         return false;
@@ -85,8 +112,8 @@ bool WinWave::write(float* samples, const size_t numSamples, const float scaleFa
     int32_t* buffer = mBuffers[mBufferIndex];
 
     for (size_t k = 0; k < numSamples; ++k) {
-        const float val = samples[k] * scaleFactor;
-        if ( mPrintClipped && ((val >= MAX_VAL) || (val <= -MAX_VAL)) ) {
+        const float val = samples[k];
+        if ( mPrintClipped && ((val >= mClipValue) || (val <= -mClipValue)) ) {
             std::cout << "Clip" << std::endl;
         }
         // float -> int32_t
@@ -153,10 +180,10 @@ size_t WinWave::getNumDevices() {
 
 void WinWave::stop() {
     if (mInitialized){
+        mInitialized = false;
         // Free memory in each buffer
         for (size_t k = 0; k < NUM_BUFFERS; ++k) {
             free(mBuffers[k]);
         }
     }
-    mInitialized = false;
 }
