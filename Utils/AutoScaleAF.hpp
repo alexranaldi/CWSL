@@ -15,16 +15,24 @@ class AutoScaleAF{
             
         // headroomdB specifies the ideal headroom in dB to maintain
         // maxVal specifies the max. e.g., a value that represents a clipped value
-        AutoScaleAF(const T headroomdB, const T maxVal, const size_t numSamplesBeforeIncrease) :
+        AutoScaleAF(const T headroomdB, const T headroomWindowdB, const T maxVal, const size_t adjSampInterval) :
+            mMaxVal(maxVal),
+            mMaxdB(0),
             mScaleFactor(0),
-            mHeadroomdB(headroomdB),
-            mMinSamplesBeforeIncrease(numSamplesBeforeIncrease),
-            mSinceDecrease(0) {
+            mHiThreshdB(0),
+            mLoThreshdB(0),
+            mAmountDecrease(0),
+            mAmountIncrease(0),
+            mNumSampBelowMinThresh(0),
+            mAdjSampInterval(adjSampInterval),
+            mNumSampSinceDecrease(0) {
                 
+            // maximum value before signal clips
             mMaxdB = v_to_db(maxVal);
-            mThreshdB = mMaxdB - headroomdB;
-            mThreshV = db_to_v(mThreshdB);
-            
+            mHiThreshdB = mMaxdB - headroomdB;
+            mLoThreshdB = mHiThreshdB - headroomWindowdB;
+            mHiThreshV = db_to_v(mHiThreshdB);
+            mLoThreshV = db_to_v(mLoThreshdB);
             mAmountDecrease = 1/db_to_v(3);
             mAmountIncrease = db_to_v(1);
         }
@@ -36,28 +44,55 @@ class AutoScaleAF{
             computeScaleFactor(v);
             return mScaleFactor;
         }
+
+        void getThresholds(T& hi, T& lo){
+            hi = mMaxdB - mHiThreshdB;
+            lo = mMaxdB - mLoThreshdB;
+        }
         
     private:
     
         // accepts samples and recomputes the scale factor
         void computeScaleFactor(const std::vector<T> v){
+            const size_t numSamp = v.size();
             // If no scale factor has been determined yet
             if (0 == mScaleFactor){
                 // initial scale factor
                 const auto maxIt = max_element(v.begin(), v.end());
                 const T maxVal = *maxIt;
-                mScaleFactor = mThreshV / maxVal;
+                mScaleFactor = mLoThreshV / maxVal;
             }
             else {
-                const size_t numGT = num_greater_than_abs(v, mThreshV / mScaleFactor);
-                const T percentGT = static_cast<T>(numGT) / static_cast<T>(v.size());
-                mSinceDecrease += v.size();
-                if (percentGT >= 0.025){
+                const size_t numGTMax = num_greater_than_abs(v, mMaxVal / mScaleFactor);
+                const size_t numGTHi = num_greater_than_abs(v, mHiThreshV / mScaleFactor);
+                const T percentGTHi = static_cast<T>(numGTHi) / static_cast<T>(numSamp);
+
+                // If more than 2.5% clip, or more than 10% of the samples are above the ideal max
+                if (numGTMax >= 0.025 || percentGTHi >= 0.10){
+                    // Decrease sale factor
                     mScaleFactor *= mAmountDecrease;
-                    mSinceDecrease = 0;
+                    mNumSampSinceDecrease = 0;
+                    mNumSampBelowMinThresh = 0;
                 }
-                else if ((percentGT <= 0.50) && (mSinceDecrease >= mMinSamplesBeforeIncrease)){
-                    mScaleFactor *= mAmountIncrease;
+                else {
+                    mNumSampSinceDecrease += numSamp;
+                    if (mNumSampSinceDecrease >= mAdjSampInterval){
+                        const size_t numGTLo = num_greater_than_abs(v, mLoThreshV / mScaleFactor);
+                        const T percentGTLo = static_cast<T>(numGTLo) / static_cast<T>(numSamp);
+                        const T percentLTLo = 1 - percentGTLo;
+                        // If more than 50% of samples are below the ideal min
+                        // (aka if less than 50% are above the ideal min) 
+                        if (percentLTLo > 0.50) {
+                            mNumSampBelowMinThresh += numSamp;
+                        }
+                        else {
+                            mNumSampBelowMinThresh = 0;
+                        }
+                        if (mNumSampBelowMinThresh > mAdjSampInterval / 2) {
+                            mScaleFactor *= mAmountIncrease;
+                            mNumSampBelowMinThresh = 0;
+                        }
+                    }
                 }
             }
         }
@@ -80,14 +115,17 @@ class AutoScaleAF{
             return count;
         }
 
-
-        size_t mMinSamplesBeforeIncrease;
-        T mScaleFactor;
-        T mHeadroomdB;
+        T mMaxVal;
         T mMaxdB;
-        T mThreshV;
-        T mThreshdB;
+        T mScaleFactor;
+        T mHiThreshV;
+        T mLoThreshV;
+        T mHiThreshdB;
+        T mLoThreshdB;
         T mAmountDecrease;
         T mAmountIncrease;
-        size_t mSinceDecrease;
+        size_t mNumSampSinceDecrease;
+        size_t mNumSampBelowMinThresh;
+        size_t mAdjSampInterval;
+
  };

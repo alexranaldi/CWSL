@@ -37,9 +37,14 @@ bool WinWave::initialize(const size_t devNum, const uint64_t Fs, const size_t bu
     bool success = false;
     size_t bitsPerSample = 32;
     while ( (!success) && (bitsPerSample >= 8) ){
+        std::cout << "Attempting to open audio device number " << devNum << " with Sample Rate: " << Fs << " Hz, Bits Per Sample: " << bitsPerSample << std::endl;
         success = openWaveDevice(devNum, Fs, bitsPerSample);
         if (!success) {
+            std::cout << "Audio device open FAILED" << std::endl;
             bitsPerSample -= 8;
+        }
+        else {
+            std::cout << "Audio device opened successfully" << std::endl;
         }
     }
         
@@ -47,7 +52,7 @@ bool WinWave::initialize(const size_t devNum, const uint64_t Fs, const size_t bu
     if (success) {
         allocBuffers(bufferLen);
         mInitialized = true;
-        mClipValue = static_cast<float>(std::pow(2, bitsPerSample - 1) - 1);
+
         return true;
     }
     
@@ -88,6 +93,7 @@ bool WinWave::openWaveDevice(const size_t devNum, const uint64_t Fs, const size_
         mFs = Fs;
         mDevNum = devNum;
         mBitsPerSample = bitsPerSample;
+        mClipValue = static_cast<float>(std::pow(2, bitsPerSample - 1) - 1);
     }
     return initialized;
 }

@@ -76,9 +76,6 @@ private:
     // Number of bits per audio sample
     // Number of channels. 1 for Mono
     static constexpr size_t NUM_CHANNELS = 1;
-    // Maximum value represented at Sample Rate=BITS_PER_SAMPLE
-    // Minimum value is -MAX_VAL
-    static constexpr int32_t MAX_VAL = 2147483647; // 2^(32-1)-1
 
     void allocBuffers(const size_t bufferLen);
     bool openWaveDevice(const size_t devNum, const uint64_t Fs, const size_t bitsPerSample);

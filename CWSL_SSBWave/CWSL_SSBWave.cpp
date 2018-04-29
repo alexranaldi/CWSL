@@ -302,7 +302,7 @@ int main(int argc, char **argv)
         SF = -1;
     }
     if (-1 == SF) {
-        std::cout << "Using automatic scale factor." << std::endl;
+        std::cout << "Using automatic scale factor (AutoAF)" << std::endl;
     }
     else {
         std::cout << "Using user-specified scale factor: " << SF << std::endl;
@@ -375,26 +375,35 @@ int main(int argc, char **argv)
 
     const size_t iq_len = BIS;
     const size_t af_len = iq_len * upsamp_ratio / decRatio;
-    std::cout << "Audio Device Sample Rate=" << Wave_SR << std::endl;
     const bool waveInitialized = wave.initialize(nWO, Wave_SR, af_len);
     if (!waveInitialized) {
         std::cout << "Failed to open and start wave device." << std::endl;
         SM.Close();
         return EXIT_FAILURE;
     }
+    std::cout << "Opened Audio Device" << std::endl;
+    std::cout << "Audio Device Sample Rate=" << Wave_SR << std::endl;
     const float waveBPS = wave.getBitsPerSample();
-    std::cout << "Audio Device bits per sample=" << waveBPS << std::endl;
-
+    std::cout << "Audio Device Bits Per Sample=" << waveBPS << std::endl;
+    wave.enablePrintClipped();
 
 
     //
     // Create AutoAF. Only used if SF == -1
     //
 
-    const size_t headroomdB = 16;
+    const float headroomdB = 16;
+    const float windowdB = 22;
     const size_t numSampBeforeAfInc = Wave_SR * 10; // 10s of samples
-    AutoScaleAF<float> af(headroomdB, wave.getClipValue(), numSampBeforeAfInc);
-
+    const float clipVal = wave.getClipValue();
+    std::cout << "Wave device absolute maximum signal value (clip level): " << clipVal << std::endl;
+    AutoScaleAF<float> af(headroomdB, windowdB, clipVal, numSampBeforeAfInc);
+    if (-1 == SF) {
+        float autoAfhi = 0;
+        float autoAflo = 0;
+        af.getThresholds(autoAfhi, autoAflo);
+        std::cout << "AutoAF ideal headroom [max,min] from clip: [" << autoAfhi << " dB, " << autoAflo << " dB]" << std::endl;
+    }
 
 
     //
