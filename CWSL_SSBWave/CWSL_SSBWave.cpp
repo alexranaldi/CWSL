@@ -38,6 +38,7 @@ const std::string gPreSM = "CWSL";
 std::string gPostSM = "Band";
 
 std::atomic_bool terminateFlag;
+std::atomic_bool holdScaleFactor;
 
 // Used internally as a single producer single consumer queue (ring buffer)
 template <typename T>
@@ -169,7 +170,7 @@ void demodulate(SSBD<float>& ssbd, Upsampler<float>& upsamp, AutoScaleAF<float>&
         }
 
         // If auto AF is enabled
-        if (-1 == SF) {
+        if (-1 == SF && !holdScaleFactor) {
             std::vector<float> afSamples(af48khz, af48khz + n48khz);
             scaleFactor = af.getScaleFactor(afSamples);
             if (scaleFactor != lastScaleFactor) {
@@ -383,7 +384,7 @@ int main(int argc, char **argv)
     }
     std::cout << "Opened Audio Device" << std::endl;
     std::cout << "Audio Device Sample Rate=" << Wave_SR << std::endl;
-    const float waveBPS = wave.getBitsPerSample();
+    const auto waveBPS = wave.getBitsPerSample();
     std::cout << "Audio Device Bits Per Sample=" << waveBPS << std::endl;
     wave.enablePrintClipped();
 
@@ -403,8 +404,9 @@ int main(int argc, char **argv)
         float autoAflo = 0;
         af.getThresholds(autoAfhi, autoAflo);
         std::cout << "AutoAF ideal headroom [max,min] from clip: [" << autoAfhi << " dB, " << autoAflo << " dB]" << std::endl;
+        std::cout << std::endl << "Press H to enable/disable hold of scale factor" << std::endl;
     }
-
+    holdScaleFactor = false;
 
     //
     // Prepare circular buffers
@@ -440,6 +442,15 @@ int main(int argc, char **argv)
             if (ch == 'Q' || ch == 'q') {
                 std::cout << "Q pressed, so terminating" << std::endl;
                 terminateFlag = true;
+            }
+            else if (SF == -1 && (ch == 'H' || ch == 'h')) {
+                holdScaleFactor = !holdScaleFactor;
+                if (holdScaleFactor){
+                    std::cout << "Holding scale factor" << std::endl;
+                }
+                else{
+                    std::cout << "No longer holding scale factor" << std::endl;
+                }
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(200));

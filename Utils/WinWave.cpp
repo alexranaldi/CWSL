@@ -117,10 +117,11 @@ bool WinWave::write(float* samples, const size_t numSamples) {
     WAVEHDR& header = mHeaders[mBufferIndex];
     int32_t* buffer = mBuffers[mBufferIndex];
 
+    size_t numClipped = 0;
     for (size_t k = 0; k < numSamples; ++k) {
         const float val = samples[k];
-        if ( mPrintClipped && ((val >= mClipValue) || (val <= -mClipValue)) ) {
-            std::cout << "Clip" << std::endl;
+        if ( ((val >= mClipValue) || (val <= -mClipValue)) ) {
+            numClipped++;
         }
         // float -> int32_t
         buffer[k] = static_cast<int32_t>(val);
@@ -143,6 +144,10 @@ bool WinWave::write(float* samples, const size_t numSamples) {
         if (mBufferIndex == NUM_BUFFERS - 1) {
             mBufferIndex = 0;
         }
+    }
+
+    if (mPrintClipped && numClipped) {
+        std::cout << "WinWave -- Clipped " << numClipped << " samples" << std::endl;
     }
 
     return ok;

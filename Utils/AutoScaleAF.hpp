@@ -102,7 +102,7 @@ class AutoScaleAF{
         }
         
         T db_to_v(const T db_in) const{
-            return std::pow(10, db_in / 20);
+            return static_cast<T>(std::pow(10, db_in / 20));
         }
 
         size_t num_greater_than_abs(const std::vector<T> v, const T test) const{

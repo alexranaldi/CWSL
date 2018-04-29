@@ -94,7 +94,7 @@ public:
 
         // Update the down-conversion tone
         sign = static_cast<PRECISION>(isUSB ? 1.0 : -1.0);
-        PRECISION phase_delta = -2.0*PI*(F+sign*B/2.0)/(double)Fs;
+        PRECISION phase_delta = static_cast<PRECISION>(-2.0*PI*(F+sign*B/2.0)/static_cast<double>(Fs));
         for (size_t n = 0; n < BlockSize; ++n)
             tone[n] = std::exp(std::complex<PRECISION>(0.0, phase_delta*n));
         phase_inc = std::exp(std::complex<PRECISION>(0.0, phase_delta*BlockSize));
