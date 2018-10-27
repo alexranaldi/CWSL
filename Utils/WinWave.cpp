@@ -106,7 +106,7 @@ void WinWave::enablePrintClipped(){
     mPrintClipped = true;
 }
 
-bool WinWave::write(float* samples, const size_t numSamples) {
+bool WinWave::write(const float* const samples, const size_t numSamples) {
 
     if (numSamples > mBufferLen) {
         return false;
@@ -124,10 +124,10 @@ bool WinWave::write(float* samples, const size_t numSamples) {
             numClipped++;
         }
         // float -> int32_t
-        buffer[k] = static_cast<int32_t>(val);
+        buffer[k] = static_cast<int32_t>(val + 0.5);
     }
 
-    header.lpData = (LPSTR)buffer;
+    header.lpData = reinterpret_cast<LPSTR>(buffer);
     header.dwBufferLength = numSamples * sizeof(int32_t);
     header.dwFlags = 0;
 

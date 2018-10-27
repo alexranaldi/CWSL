@@ -38,7 +38,7 @@ class WinWave {
     bool initialize(const size_t devNum, const uint64_t Fs, const size_t bufferLen);
     
     // Writes audio samples to the Wave Out audio device
-    bool write(float* samples, const size_t numSamples);
+    bool write(const float* const samples, const size_t numSamples);
 
     void stop();
     
