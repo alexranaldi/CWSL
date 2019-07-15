@@ -62,8 +62,8 @@ bool initialize(ring_buffer_t<T>& buf, const size_t size) {
 
 template <typename T>
 bool wait_for_empty_slot(ring_buffer_t<T>& buf) {
-    while ((buf.read_index == buf.write_index + 1) || (buf.read_index == 0 && buf.write_index == buf.size - 1)) {
-        std::this_thread::sleep_for(std::chrono::microseconds(250));
+    while ((buf.read_index == buf.write_index + 1) || (buf.read_index == 0 && static_cast<int64_t>(buf.write_index) == static_cast<int64_t>(buf.size) - 1)) {
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
         if (terminateFlag) {
             return false;
         }
@@ -73,7 +73,8 @@ bool wait_for_empty_slot(ring_buffer_t<T>& buf) {
 
 template <typename T>
 void inc_write_index(ring_buffer_t<T>& buf) {
-    if (buf.write_index == buf.size - 1) {
+    // cast to signed so we don't break subtraction
+    if (static_cast<int64_t>(buf.write_index) == static_cast<int64_t>(buf.size) - 1) {
         buf.write_index = 0;
     }
     else {
@@ -97,7 +98,7 @@ T pop(ring_buffer_t<T>& buf) {
 template <typename T>
 bool wait_for_data(ring_buffer_t<T>& buf) {
     while (buf.read_index == buf.write_index) {
-        std::this_thread::sleep_for(std::chrono::microseconds(250));
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
         if (terminateFlag) {
             return false;
         }
@@ -110,6 +111,8 @@ ring_buffer_t<float*> af_buffer;
 
 int SF = 16;
 
+int SMNumber = -1;
+
 void readIQ(CSharedMemory &SM, const size_t iq_len) {
 
     while (!terminateFlag) {
@@ -119,21 +122,20 @@ void readIQ(CSharedMemory &SM, const size_t iq_len) {
         
         // wait for a slot to be ready in the buffer. Blocks until slot available.
         if (!wait_for_empty_slot(iq_buffer)) {
-            return;
+            std::cout << "No slots available in IQ buffer!" << std::endl;
+            continue;
         }
 
         std::complex<float>* iq_data_f = iq_buffer.recs[iq_buffer.write_index];
 
         // read block of data from receiver
         const bool readSuccess = SM.Read((PBYTE)iq_data_f, iq_len * sizeof(std::complex<float>));
-        if (!readSuccess) {
-            std::cout << "Did not read any I/Q data" << std::endl;
-            continue;
+        if (readSuccess) {
+            inc_write_index(iq_buffer);
         }
-
-
-        inc_write_index(iq_buffer);
-        
+        else {
+            std::cout << "Did not read any I/Q data from shared memory" << std::endl;
+        }
     }
 }
 
@@ -153,7 +155,8 @@ void demodulate(SSBD<float>& ssbd, Upsampler<float>& upsamp, AutoScaleAF<float>&
     while (!terminateFlag) {
         // wait for available memory to write audio data to
         if (!wait_for_empty_slot(af_buffer)) {
-            return;
+            std::cout << "No slots available for audio data!" << std::endl;
+            continue;
         }
         // get IQ data
         std::complex<float> *xc = pop(iq_buffer);
@@ -212,7 +215,11 @@ int findBand(const int64_t f) {
     for (bandIndex = 0; bandIndex < MAX_CWSL; ++bandIndex) {
 
         // create name of shared memory
-        const std::string Name = gPreSM + std::to_string(bandIndex) + gPostSM;
+        std::string Name = gPreSM + std::to_string(bandIndex);
+        if (SMNumber != -1) {
+            Name += std::to_string(SMNumber);
+        }
+        Name += gPostSM;
 
         // try to open shared memory
         if (SM.Open(Name.c_str())) {
@@ -250,11 +257,12 @@ int main(int argc, char **argv)
     if (argc < 4) {
         // print usage
         std::cout << "Not enough input arguments!" << std::endl;
-        std::cout << "Usage: CWSL_SSBWave FreqHz WaveOutNr SSB_LSB Scale_factor" << std::endl;
+        std::cout << "Usage: CWSL_SSBWave FreqHz WaveOutNr SSB_LSB Scale_factor Shared_Mem" << std::endl;
         std::cout << "    FreqHz is the frequency in Hz" << std::endl
                   << "    WaveOutNr is the Wave Out device number or name" << std::endl
                   << "    SSB_LSB is 1 for Upper Sideband, 0 for Lower Sideband" << std::endl
-                  << "    Scale_factor is -1 for Auto-Scaling" << std::endl;
+                  << "    Scale_factor is -1 for Auto-Scaling" << std::endl
+                  << "    Shared_Mem is an optional single numeric digit specifying the shared memory interface" << std::endl;
         std::cout << std::endl; //blank line           
         // print the list of WaveOut devices
         const size_t numDevs = wave.getNumDevices();
@@ -267,6 +275,17 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
+    // Shared Mem
+    if (argc >= 6) {
+        std::cout << "A shared memory interface was specified." << std::endl;
+        if ((sscanf(argv[5], "%d", &SMNumber) != 1)) {
+            std::cout << "Unable to deciper the specified Shared_Mem interface, so ignoring" << std::endl;
+        }
+        else {
+            std::cout << "Using shared mem interface number: " << SMNumber << std::endl;
+        }
+    }
+
     int64_t ssbFreq = 0;
     // Get USB frequency
     if ((sscanf(argv[1], "%I64d", &ssbFreq) != 1)) {
@@ -276,7 +295,7 @@ int main(int argc, char **argv)
     std::cout << "SSB Demodulator F=" << ssbFreq << std::endl;
     nMem = findBand(ssbFreq);
     if (-1 == nMem) {
-        std::cout << "Bad SSB Freq" << std::endl;
+        std::cout << "Bad FreqHz or Shared_Mem specified" << std::endl;
         return EXIT_FAILURE;
     }
 
@@ -393,9 +412,9 @@ int main(int argc, char **argv)
     // Create AutoAF. Only used if SF == -1
     //
 
-    const float headroomdB = 16;
+    const float headroomdB = 18;
     const float windowdB = 22;
-    const size_t numSampBeforeAfInc = Wave_SR * 10; // 10s of samples
+    const size_t numSampBeforeAfInc = Wave_SR * 300; // 300s of samples
     const float clipVal = wave.getClipValue();
     std::cout << "Wave device absolute maximum signal value (clip level): " << clipVal << std::endl;
     AutoScaleAF<float> af(headroomdB, windowdB, clipVal, numSampBeforeAfInc);
@@ -412,11 +431,11 @@ int main(int argc, char **argv)
     // Prepare circular buffers
     // 
 
-    initialize(iq_buffer, 1024);
+    initialize(iq_buffer, 4096);
     for (size_t k = 0; k < iq_buffer.size; ++k) {
         iq_buffer.recs[k] = reinterpret_cast<std::complex<float>*>( malloc( sizeof(std::complex<float>) * iq_len ) );
     }
-    initialize(af_buffer, 1024);
+    initialize(af_buffer, 4096);
     for (size_t k = 0; k < af_buffer.size; ++k) {
         af_buffer.recs[k] = reinterpret_cast<float*>( malloc( sizeof(float) * af_len) );
     }
@@ -425,9 +444,11 @@ int main(int argc, char **argv)
     //  Start Threads
     //
 
-    
+    std::cout << "Creating receiver thread..." << std::endl;
     std::thread iqThread = std::thread(readIQ, std::ref(SM), BIS);
+    std::cout << "Creating SSB Demodulator thread..." << std::endl;
     std::thread demodThread = std::thread(&demodulate, std::ref(ssbd), std::ref(upsamp), std::ref(af), BIS, decRatio);
+    std::cout << "Creating Audio Device thread..." << std::endl;
     std::thread audioThread = std::thread(&writeAudio, std::ref(wave), af_len);
     
     //
@@ -453,7 +474,7 @@ int main(int argc, char **argv)
                 }
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 
     //
