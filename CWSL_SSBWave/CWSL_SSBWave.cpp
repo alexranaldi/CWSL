@@ -204,22 +204,27 @@ void writeAudio(WinWave& wave, const size_t len) {
 
 }
 
+std::string createSharedMemName(const int bandIndex) {
+    // create name of shared memory
+    std::string Name = gPreSM + std::to_string(bandIndex) + gPostSM;
+    if (SMNumber != -1) {
+        Name += std::to_string(SMNumber);
+    }
+    return Name;
+}
+
 //////////////////////////////////////////////////////////////////////////////
 // Find the right band
 int findBand(const int64_t f) {
     CSharedMemory SM;
     SM_HDR h;
-    int bandIndex;
 
     // try to find right band - for all possible bands ...
-    for (bandIndex = 0; bandIndex < MAX_CWSL; ++bandIndex) {
+    for (int bandIndex = 0; bandIndex < MAX_CWSL; ++bandIndex) {
 
-        // create name of shared memory
-        std::string Name = gPreSM + std::to_string(bandIndex);
-        if (SMNumber != -1) {
-            Name += std::to_string(SMNumber);
-        }
-        Name += gPostSM;
+        const std::string Name = createSharedMemName(bandIndex);
+
+        std::cout << "Opening shared memory with name: " << Name << std::endl;
 
         // try to open shared memory
         if (SM.Open(Name.c_str())) {
@@ -278,7 +283,7 @@ int main(int argc, char **argv)
     // Shared Mem
     if (argc >= 6) {
         std::cout << "A shared memory interface was specified." << std::endl;
-        if ((sscanf(argv[5], "%d", &SMNumber) != 1)) {
+        if (sscanf(argv[5], "%d", &SMNumber) != 1) {
             std::cout << "Unable to deciper the specified Shared_Mem interface, so ignoring" << std::endl;
         }
         else {
@@ -346,10 +351,11 @@ int main(int argc, char **argv)
     //
    
     // create name of shared memory
-    const std::string name = gPreSM + std::to_string(nMem) + gPostSM;
+    const std::string name = createSharedMemName(nMem);
     // try to open shared memory
     if (!SM.Open(name.c_str())) {
         fprintf(stderr, "Can't open shared memory for %d receiver\n", nMem);
+        std::cout << "Failed to open shared memory, so terminating" << std::endl;
         return EXIT_FAILURE;
     }
     // get info about channel
