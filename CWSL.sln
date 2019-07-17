@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 15
-VisualStudioVersion = 15.0.27428.2002
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.29102.190
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CWSL_Tee", "CWSL_Tee\CWSL_Tee.vcxproj", "{304C98D8-800D-4359-BE06-18FF490CCAA2}"
 EndProject
@@ -14,6 +14,8 @@ EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CWSL_Net", "CWSL_Net\CWSL_Net.vcxproj", "{C86EAD9E-8E97-4416-A9EF-A05EC01ADEFD}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CWSL_SSBWave", "CWSL_SSBWave\CWSL_SSBWave.vcxproj", "{A9B24B97-F59E-4330-998B-59B37B795789}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CWSL_FT8", "CWSL_FT8\CWSL_FT8.vcxproj", "{64169AA7-3999-40F0-9FDA-2E0896499C1B}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -61,6 +63,14 @@ Global
 		{A9B24B97-F59E-4330-998B-59B37B795789}.Release|Win32.Build.0 = Release|Win32
 		{A9B24B97-F59E-4330-998B-59B37B795789}.Release|x64.ActiveCfg = Release|x64
 		{A9B24B97-F59E-4330-998B-59B37B795789}.Release|x64.Build.0 = Release|x64
+		{64169AA7-3999-40F0-9FDA-2E0896499C1B}.Debug|Win32.ActiveCfg = Debug|Win32
+		{64169AA7-3999-40F0-9FDA-2E0896499C1B}.Debug|Win32.Build.0 = Debug|Win32
+		{64169AA7-3999-40F0-9FDA-2E0896499C1B}.Debug|x64.ActiveCfg = Debug|x64
+		{64169AA7-3999-40F0-9FDA-2E0896499C1B}.Debug|x64.Build.0 = Debug|x64
+		{64169AA7-3999-40F0-9FDA-2E0896499C1B}.Release|Win32.ActiveCfg = Release|Win32
+		{64169AA7-3999-40F0-9FDA-2E0896499C1B}.Release|Win32.Build.0 = Release|Win32
+		{64169AA7-3999-40F0-9FDA-2E0896499C1B}.Release|x64.ActiveCfg = Release|x64
+		{64169AA7-3999-40F0-9FDA-2E0896499C1B}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
