@@ -28,6 +28,7 @@ struct decode_audio_buffer_t {
 			buf[write_index] = sample;
 			write_index++;
 		}
+		std::cout << "Wrote " << samples.size() << " samples, " << buf.size() - write_index << " space remains" << std::endl;
 		return true;
 	}
 
