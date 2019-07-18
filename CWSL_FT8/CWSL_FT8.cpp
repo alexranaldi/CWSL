@@ -47,7 +47,7 @@ std::atomic_bool holdScaleFactor;
 
 
 ring_buffer_t<std::complex<float>*> iq_buffer;
-decode_audio_buffer_t<float, N_AUDIO_SAMPLES> decode_audio_buffer;
+decode_audio_buffer_t<float, num_samples> decode_audio_buffer;
 
 
 int SF = 16;
@@ -80,6 +80,76 @@ void waitForTime() {
 	
 void doDecodeFT8() {
 	std::cout << "Decoding..." << std::endl;
+
+	// Compute FFT over the whole signal and store it
+	uint8_t power[num_blocks * 4 * num_bins];
+	extract_power<num_bins>(decode_audio_buffer.buf.data(), num_blocks, power);
+	
+	// Find top candidates by Costas sync score and localize them in time and frequency
+	ft8::Candidate candidate_list[kMax_candidates];
+	int num_candidates = ft8::find_sync(power, num_blocks, num_bins, ft8::kCostas_map, kMax_candidates, candidate_list);
+
+	// Go over candidates and attempt to decode messages
+	char    decoded[kMax_decoded_messages][kMax_message_length];
+	int     num_decoded = 0;
+	for (int idx = 0; idx < num_candidates; ++idx) {
+		ft8::Candidate& cand = candidate_list[idx];
+		float freq_hz = (cand.freq_offset + cand.freq_sub / 2.0f) * fsk_dev;
+		float time_sec = (cand.time_offset + cand.time_sub / 2.0f) / fsk_dev;
+
+		float   log174[ft8::N];
+		ft8::extract_likelihood(power, num_bins, cand, ft8::kGray_map, log174);
+
+		// bp_decode() produces better decodes, uses way less memory
+		uint8_t plain[ft8::N];
+		int     n_errors = 0;
+		ft8::bp_decode(log174, kLDPC_iterations, plain, &n_errors);
+		//ldpc_decode(log174, kLDPC_iterations, plain, &n_errors);
+
+		if (n_errors > 0) {
+			LOG(LOG_DEBUG, "ldpc_decode() = %d (%.0f Hz)\n", n_errors, freq_hz);
+			continue;
+		}
+
+		// Extract payload + CRC (first ft8::K bits)
+		uint8_t a91[ft8::K_BYTES];
+		ft8::pack_bits(plain, ft8::K, a91);
+
+		// Extract CRC and check it
+		uint16_t chksum = ((a91[9] & 0x07) << 11) | (a91[10] << 3) | (a91[11] >> 5);
+		a91[9] &= 0xF8;
+		a91[10] = 0;
+		a91[11] = 0;
+		uint16_t chksum2 = ft8::crc(a91, 96 - 14);
+		if (chksum != chksum2) {
+			LOG(LOG_DEBUG, "Checksum: message = %04x, CRC = %04x\n", chksum, chksum2);
+			continue;
+		}
+
+		char message[kMax_message_length];
+		ft8::unpack77(a91, message);
+
+		// Check for duplicate messages (TODO: use hashing)
+		bool found = false;
+		for (int i = 0; i < num_decoded; ++i) {
+			if (0 == strcmp(decoded[i], message)) {
+				found = true;
+				break;
+			}
+		}
+
+		if (!found && num_decoded < kMax_decoded_messages) {
+			strcpy(decoded[num_decoded], message);
+			++num_decoded;
+
+			// Fake WSJT-X-like output for now
+			int snr = 0;    // TODO: compute SNR
+			printf("000000 %3d %4.1f %4d ~  %s\n", cand.score, time_sec, (int)(freq_hz + 0.5f), message);
+		}
+	}
+	LOG(LOG_INFO, "Decoded %d messages\n", num_decoded);
+
+
 
 	std::cout << "Done decoding" << std::endl;
 }
@@ -372,7 +442,7 @@ int main(int argc, char **argv)
     std::cout << "Creating receiver thread..." << std::endl;
     std::thread iqThread = std::thread(readIQ, std::ref(SM), BIS);
     std::cout << "Creating SSB Demodulator thread..." << std::endl;
-    std::thread demodThread = std::thread(&demodulate<float,N_AUDIO_SAMPLES>, std::ref(ssbd), std::ref(upsamp), std::ref(af), BIS, decRatio, std::ref(decode_audio_buffer));
+    std::thread demodThread = std::thread(&demodulate<float,num_samples>, std::ref(ssbd), std::ref(upsamp), std::ref(af), BIS, decRatio, std::ref(decode_audio_buffer));
 	std::cout << "Creating decoder thread..." << std::endl;
 	std::thread decodeThread = std::thread(&decodeLoop);
 
