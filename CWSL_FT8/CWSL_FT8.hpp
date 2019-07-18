@@ -27,4 +27,5 @@ constexpr float fsk_dev = 6.25f;
 constexpr int sample_rate = 48000;
 constexpr int num_bins = static_cast<int>(sample_rate / (2 * fsk_dev));
 
-const int N = num_bins;
+constexpr int N = num_bins;
+constexpr int N_AUDIO_SAMPLES = 15 * sample_rate;

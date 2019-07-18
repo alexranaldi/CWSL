@@ -47,7 +47,7 @@ std::atomic_bool holdScaleFactor;
 
 
 ring_buffer_t<std::complex<float>*> iq_buffer;
-decode_audio_buffer_t<float, N> decode_audio_buffer;
+decode_audio_buffer_t<float, N_AUDIO_SAMPLES> decode_audio_buffer;
 
 
 int SF = 16;
@@ -143,9 +143,7 @@ void demodulate(SSBD<T>& ssbd, Upsampler<T>& upsamp, AutoScaleAF<T>& af, const s
     T scaleFactor = static_cast<T>(std::pow(SF, 2));
     T lastScaleFactor = 0;
 
-	std::vector<T> af48khz;
-	af48khz.resize(n48khz);
-	af48khz.clear();
+	std::vector<T> af48khz(n48khz);
 
     while (!terminateFlag) {
         // get IQ data
@@ -213,12 +211,6 @@ int findBand(const int64_t f) {
 // Main function
 int main(int argc, char **argv)
 {
-    CSharedMemory SM;
-    SM_HDR *SHDR;
-    int nMem = 0;
-    size_t nWO = 0;
-
-    terminateFlag = false;
 
     // check number of input parameters
     if (argc < 4) {
@@ -229,7 +221,15 @@ int main(int argc, char **argv)
                   << "    Scale_factor is -1 for Auto-Scaling" << std::endl
                   << "    Shared_Mem is an optional single numeric digit specifying the shared memory interface" << std::endl;
         std::cout << std::endl;           
+        return EXIT_SUCCESS;
     }
+
+    CSharedMemory SM;
+    SM_HDR* SHDR;
+    int nMem = 0;
+    size_t nWO = 0;
+
+    terminateFlag = false;
 
     // Shared Mem
     if (argc >= 4) {
@@ -372,7 +372,7 @@ int main(int argc, char **argv)
     std::cout << "Creating receiver thread..." << std::endl;
     std::thread iqThread = std::thread(readIQ, std::ref(SM), BIS);
     std::cout << "Creating SSB Demodulator thread..." << std::endl;
-    std::thread demodThread = std::thread(&demodulate<float,N>, std::ref(ssbd), std::ref(upsamp), std::ref(af), BIS, decRatio, std::ref(decode_audio_buffer));
+    std::thread demodThread = std::thread(&demodulate<float,N_AUDIO_SAMPLES>, std::ref(ssbd), std::ref(upsamp), std::ref(af), BIS, decRatio, std::ref(decode_audio_buffer));
 	std::cout << "Creating decoder thread..." << std::endl;
 	std::thread decodeThread = std::thread(&decodeLoop);
 
