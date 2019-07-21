@@ -16,20 +16,20 @@
 #include "ring_buffer.h"
 
 
-constexpr int kMax_candidates = 100;
-constexpr int kLDPC_iterations = 20;
+constexpr int kMax_candidates = 2500;
+constexpr int kLDPC_iterations = 125;
 
-constexpr int kMax_decoded_messages = 50;
-constexpr int kMax_message_length = 20;
+constexpr int kMax_decoded_messages = 100;
+constexpr int kMax_message_length = 40;
 
 
-constexpr float fsk_dev = 6.25f;
-constexpr int sample_rate = 48000;
+constexpr double fsk_dev = 6.25f;
+constexpr int sample_rate = 6000;
 constexpr int num_bins = static_cast<int>(sample_rate / (2 * fsk_dev));
 
 constexpr int block_size = 2 * num_bins;
 
-constexpr int num_samples = 15 * sample_rate;
+constexpr int num_samples = 15.5 * sample_rate;
 
 constexpr int num_blocks = (num_samples - (block_size / 2) - block_size) / block_size;
 

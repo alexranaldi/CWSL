@@ -32,7 +32,6 @@
 
 #include "CWSL_FT8.hpp"
 
-
 // Maximum of CWSL bands
 #define MAX_CWSL   32
 
@@ -45,10 +44,10 @@ std::string gPostSM = "Band";
 std::atomic_bool terminateFlag;
 std::atomic_bool holdScaleFactor;
 
+ring_buffer_t<std::complex<double>*> iq_buffer;
+decode_audio_buffer_t<double, num_samples> decode_audio_buffer;
 
-ring_buffer_t<std::complex<float>*> iq_buffer;
-decode_audio_buffer_t<float, num_samples> decode_audio_buffer;
-
+ring_buffer_t< decode_audio_buffer_t<double, num_samples> > decode_audio_ring_buffer;
 
 int SF = 16;
 
@@ -78,26 +77,35 @@ void waitForTime() {
 	}
 }
 	
-void doDecodeFT8() {
+void doDecodeFT8(decode_audio_buffer_t<double, num_samples>& decode_audio_buffer) {
 	std::cout << "Decoding..." << std::endl;
 
-	// Compute FFT over the whole signal and store it
-	uint8_t power[num_blocks * 4 * num_bins];
-	extract_power<num_bins>(decode_audio_buffer.buf.data(), num_blocks, power);
-	
+    std::vector<uint8_t> power(num_blocks * 4 * num_bins);
+
+    normalize_signal(decode_audio_buffer.buf);
+
+	// Compute FFT over the whole signal and store it    
+	extract_power<num_bins, num_samples>(decode_audio_buffer.buf, num_blocks, power);
+    
 	// Find top candidates by Costas sync score and localize them in time and frequency
 	ft8::Candidate candidate_list[kMax_candidates];
 	int num_candidates = ft8::find_sync(power, num_blocks, num_bins, ft8::kCostas_map, kMax_candidates, candidate_list);
 
+    //std::cout << "Num candidates: " << num_candidates << std::endl;
+
+    
 	// Go over candidates and attempt to decode messages
 	char    decoded[kMax_decoded_messages][kMax_message_length];
 	int     num_decoded = 0;
 	for (int idx = 0; idx < num_candidates; ++idx) {
 		ft8::Candidate& cand = candidate_list[idx];
-		float freq_hz = (cand.freq_offset + cand.freq_sub / 2.0f) * fsk_dev;
-		float time_sec = (cand.time_offset + cand.time_sub / 2.0f) / fsk_dev;
 
-		float   log174[ft8::N];
+		double freq_hz = (cand.freq_offset + cand.freq_sub / 2.0f) * fsk_dev;
+		double time_sec = (cand.time_offset + cand.time_sub / 2.0f) / fsk_dev;
+
+        //std::cout << "Freq: " << freq_hz << " time_sec: " << time_sec << std::endl;
+
+		double   log174[ft8::N];
 		ft8::extract_likelihood(power, num_bins, cand, ft8::kGray_map, log174);
 
 		// bp_decode() produces better decodes, uses way less memory
@@ -128,6 +136,7 @@ void doDecodeFT8() {
 
 		char message[kMax_message_length];
 		ft8::unpack77(a91, message);
+        //std::cout << message << std::endl;
 
 		// Check for duplicate messages (TODO: use hashing)
 		bool found = false;
@@ -147,29 +156,33 @@ void doDecodeFT8() {
 			printf("000000 %3d %4.1f %4d ~  %s\n", cand.score, time_sec, (int)(freq_hz + 0.5f), message);
 		}
 	}
-	LOG(LOG_INFO, "Decoded %d messages\n", num_decoded);
 
-
+	LOG(LOG_INFO, "Decoded %d messages\n", num_decoded);     
 
 	std::cout << "Done decoding" << std::endl;
 }
 
+void sampleManager() {
+    while (!terminateFlag) {
+        waitForTime();
+        if (terminateFlag) {
+            return;
+        }
+        decode_audio_ring_buffer.wait_for_empty_slot();
+        if (terminateFlag) {
+            return;
+        }
+        decode_audio_ring_buffer.inc_write_index();
+        decode_audio_ring_buffer.recs[decode_audio_ring_buffer.write_index].clear();
+        // wait at least 1.5 seconds so we don't double decode
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    }
+}
+
 void decodeLoop() {
 	while (!terminateFlag) {
-		waitForTime();
-		std::time_t t = std::time(nullptr);
-		const auto ts = std::gmtime(&t);
-		std::cout << "UTC:   " << std::put_time(ts, "%c %Z") << std::endl;
-		if (terminateFlag) {
-			return;
-		}
-		doDecodeFT8();
-		if (terminateFlag) {
-			return;
-		}
-		decode_audio_buffer.clear();
-		// wait at least 1.5 seconds so we don't double decode
-		std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        decode_audio_buffer_t<double, num_samples>& decode_buf = decode_audio_ring_buffer.pop_ref();
+		doDecodeFT8(decode_buf);
 	}
 }
 
@@ -186,10 +199,15 @@ void readIQ(CSharedMemory &SM, const size_t iq_len) {
             continue;
         }
 
-        std::complex<float>* iq_data_f = iq_buffer.recs[iq_buffer.write_index];
+        std::vector<std::complex<float>> iq_raw(iq_len);
 
         // read block of data from receiver
-        const bool readSuccess = SM.Read((PBYTE)iq_data_f, iq_len * sizeof(std::complex<float>));
+        const bool readSuccess = SM.Read((PBYTE)iq_raw.data(), iq_len * sizeof(std::complex<float>));
+
+        for (size_t k = 0; k < iq_len; ++k) {
+            iq_buffer.recs[iq_buffer.write_index][k] = iq_raw[k];
+        }
+
         if (readSuccess) {
 			iq_buffer.inc_write_index();
         }
@@ -200,22 +218,15 @@ void readIQ(CSharedMemory &SM, const size_t iq_len) {
 }
 
 template <typename T, int N>
-void demodulate(SSBD<T>& ssbd, Upsampler<T>& upsamp, AutoScaleAF<T>& af, const size_t iq_len, const size_t decRatio, decode_audio_buffer_t<T,N>& decode_audio_buffer) {
+void demodulate(SSBD<T>& ssbd, AutoScaleAF<T>& af, const size_t iq_len, const size_t decRatio) {
     // Demodulate IQ for SSB
 
     const size_t ssbd_in_size = ssbd.GetInSize();
-    const size_t upsamp_ratio = upsamp.GetRatio();
 
     std::vector<T> af6khz(iq_len / decRatio, 0.0);
-
-    const size_t n48khz = iq_len * upsamp_ratio / decRatio;
-
-    T scaleFactor = static_cast<T>(std::pow(SF, 2));
-    T lastScaleFactor = 0;
-
-	std::vector<T> af48khz(n48khz);
-
+    
     while (!terminateFlag) {
+
         // get IQ data
         std::complex<T> *xc = iq_buffer.pop();
 
@@ -223,25 +234,9 @@ void demodulate(SSBD<T>& ssbd, Upsampler<T>& upsamp, AutoScaleAF<T>& af, const s
             ssbd.Iterate(xc + n, af6khz.data() + n / decRatio);
         }
 
-        // Upsample 6kHz audio to 48khz
-        for (size_t n = 0; n < af6khz.size(); ++n) {
-            upsamp.Iterate(af6khz.data() + n, af48khz.data() + n * upsamp_ratio);
-        }
-
-        // If auto AF is enabled
-        if (-1 == SF && !holdScaleFactor) {
-            scaleFactor = af.getScaleFactor(af48khz);
-            if (scaleFactor != lastScaleFactor) {
-                std::cout << "Scale factor set to: " << scaleFactor << std::endl;
-                lastScaleFactor = scaleFactor;
-            }
-        }
-        for (size_t n = 0; n < n48khz; ++n) {
-            af48khz[n] *= scaleFactor;
-        }
-
         // AF write complete
-		decode_audio_buffer.write(af48khz);
+        auto& decode_audio_buffer = decode_audio_ring_buffer.recs[decode_audio_ring_buffer.write_index];
+		decode_audio_buffer.write(af6khz);
     }
 }
 
@@ -378,7 +373,7 @@ int main(int argc, char **argv)
     // F is always Fc-LO
     const int64_t LO = static_cast<int64_t>(SHDR->L0);
     const int64_t F = ssbFreq - SHDR->L0;
-    SSBD<float> ssbd(SR, SSB_BW, static_cast<float>(F), static_cast<bool>(USB));
+    SSBD<double> ssbd(SR, SSB_BW, static_cast<double>(F), static_cast<bool>(USB));
     const size_t SSB_SR = ssbd.GetOutRate();
     const size_t decRatio = SR / SSB_SR;
 
@@ -386,36 +381,28 @@ int main(int argc, char **argv)
     // Create the UpSampler
     //
 
-    Upsampler<float> upsamp(3); //2^3=8 ratio
-    const size_t Wave_SR = 48000;
-    std::cout << "Upsampling audio from " << SSB_SR << " Hz to " << Wave_SR << " Hz" << std::endl;
-    const size_t upsamp_ratio = upsamp.GetRatio();
-    if (upsamp_ratio != Wave_SR / SSB_SR) {
-        std::cout << "UpSampler does not support the specified wave output sample rate" << std::endl;
-        SM.Close();
-        return EXIT_FAILURE;
-    }
+    const size_t Wave_SR = 6000;
+
 
     // 
     // Open WinWave (audio device)
     //
 
     const size_t iq_len = BIS;
-    const size_t af_len = iq_len * upsamp_ratio / decRatio;
 
     //
     // Create AutoAF. Only used if SF == -1
     //
 
-    const float headroomdB = 18;
-    const float windowdB = 22;
+    const double headroomdB = 18;
+    const double windowdB = 22;
     const size_t numSampBeforeAfInc = Wave_SR * 300; // 300s of samples
-	const float clipVal = static_cast<float>(std::pow(2, BITS_PER_SAMPLE - 1) - 1);
+	const double clipVal = static_cast<double>(std::pow(2, BITS_PER_SAMPLE - 1) - 1);
 
-    AutoScaleAF<float> af(headroomdB, windowdB, clipVal, numSampBeforeAfInc);
+    AutoScaleAF<double> af(headroomdB, windowdB, clipVal, numSampBeforeAfInc);
     if (-1 == SF) {
-        float autoAfhi = 0;
-        float autoAflo = 0;
+        double autoAfhi = 0;
+        double autoAflo = 0;
         af.getThresholds(autoAfhi, autoAflo);
         std::cout << "AutoAF ideal headroom [max,min] from clip: [" << autoAfhi << " dB, " << autoAflo << " dB]" << std::endl;
         std::cout << std::endl << "Press H to enable/disable hold of scale factor" << std::endl;
@@ -432,7 +419,15 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
     for (size_t k = 0; k < iq_buffer.size; ++k) {
-        iq_buffer.recs[k] = reinterpret_cast<std::complex<float>*>( malloc( sizeof(std::complex<float>) * iq_len ) );
+        iq_buffer.recs[k] = reinterpret_cast<std::complex<double>*>( malloc( sizeof(std::complex<double>) * iq_len ) );
+    }
+    initStatus = decode_audio_ring_buffer.initialize(3);
+    if (!initStatus) {
+        std::cout << "Failed to initialize decode_audio_ring_buffer" << std::endl;
+        return EXIT_FAILURE;
+    }
+    for (size_t k = 0; k < decode_audio_ring_buffer.size; ++k) {
+        decode_audio_ring_buffer.recs[k].clear();
     }
 
     //
@@ -442,14 +437,11 @@ int main(int argc, char **argv)
     std::cout << "Creating receiver thread..." << std::endl;
     std::thread iqThread = std::thread(readIQ, std::ref(SM), BIS);
     std::cout << "Creating SSB Demodulator thread..." << std::endl;
-    std::thread demodThread = std::thread(&demodulate<float,num_samples>, std::ref(ssbd), std::ref(upsamp), std::ref(af), BIS, decRatio, std::ref(decode_audio_buffer));
+    std::thread demodThread = std::thread(&demodulate<double,num_samples>, std::ref(ssbd),  std::ref(af), BIS, decRatio);
+    std::cout << "Creating samplemanager thread..." << std::endl;
+    std::thread sampleManagerThread = std::thread(&sampleManager);
 	std::cout << "Creating decoder thread..." << std::endl;
 	std::thread decodeThread = std::thread(&decodeLoop);
-
-	/*
-    std::cout << "Creating Audio Device thread..." << std::endl;
-    std::thread audioThread = std::thread(&writeAudio, std::ref(wave), af_len);
-    */
 
     //
     //  Main Loop

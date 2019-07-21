@@ -9,17 +9,33 @@ struct decode_audio_buffer_t {
 	std::size_t write_index;
 	std::size_t read_index;
 	std::array<T, N> buf;
+    std::atomic<bool> paused;
 
 	decode_audio_buffer_t() : 
 		write_index(0),
-		read_index(0)
+		read_index(0),
+        paused(false)
 	{
 
 	}
 
+    void pause()
+    {
+        paused = true;
+    }
+
+    void resume()
+    {
+        paused = false;
+    }
+
 	bool write(const std::vector<T>& samples) 
 	{
-		if ( (samples.size() + write_index) > buf.size() )
+        if (paused)
+        {
+            return false;
+        }
+		else if ( (samples.size() + write_index) > buf.size() )
 		{
 			std::cout << "decode audio buffer full!" << std::endl;
 			return false;

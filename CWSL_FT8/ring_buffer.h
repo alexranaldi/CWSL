@@ -18,11 +18,13 @@ struct ring_buffer_t {
 
 	ring_buffer_t() :
 		terminateFlag(false),
-		recs(nullptr)
+		recs(nullptr),
+        size(0)
 	{
 	}
 
-	bool initialize(const size_t sizeIn) {
+	bool initialize(const size_t sizeIn) 
+    {
 		read_index = 0;
 		write_index = 0;
 		size = sizeIn;
@@ -30,12 +32,14 @@ struct ring_buffer_t {
 		return (recs != nullptr);
 	}
 
-	void terminate() {
+	void terminate() 
+    {
 		terminateFlag = true;
 	}
 
 	~ring_buffer_t() 
 	{
+    /*
 		if (nullptr != recs)
 		{
 			for (size_t k = 0; k < size; ++k) {
@@ -43,9 +47,11 @@ struct ring_buffer_t {
 			}
 			free(recs);
 		}
+        */
 	}
 
-	bool wait_for_empty_slot() const {
+	bool wait_for_empty_slot() const 
+    {
 		while ((read_index == write_index + 1) || (read_index == 0 && static_cast<int64_t>(write_index) == static_cast<int64_t>(size) - 1)) {
 			std::this_thread::sleep_for(std::chrono::microseconds(100));
 			if (terminateFlag) {
@@ -55,7 +61,8 @@ struct ring_buffer_t {
 		return true;
 	}
 
-	void inc_write_index() {
+	void inc_write_index()
+    {
 		// cast to signed so we don't break subtraction
 		if (static_cast<int64_t>(write_index) == static_cast<int64_t>(size) - 1) {
 			write_index = 0;
@@ -65,7 +72,21 @@ struct ring_buffer_t {
 		}
 	}
 
-	T pop() {
+    T& pop_ref()
+    {
+        wait_for_data();
+        T& curr = recs[read_index];
+        if (read_index == size - 1) {
+            read_index = 0;
+        }
+        else {
+            read_index++;
+        }
+        return curr;
+    }
+
+	T pop() 
+    {
 		wait_for_data();
 		T curr = recs[read_index];
 		if (read_index == size - 1) {
@@ -77,8 +98,9 @@ struct ring_buffer_t {
 		return curr;
 	}
 
-	bool wait_for_data() const {
-		while (read_index == write_index) {
+	bool wait_for_data() const 
+    {
+		while (empty()) {
 			std::this_thread::sleep_for(std::chrono::microseconds(100));
 			if (terminateFlag) {
 				return false;
@@ -86,5 +108,9 @@ struct ring_buffer_t {
 		}
 		return true;
 	}
+
+    bool empty() const {
+        return read_index == write_index;
+    }
 
 };
