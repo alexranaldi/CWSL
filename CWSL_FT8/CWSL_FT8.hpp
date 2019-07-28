@@ -16,8 +16,8 @@
 #include "ring_buffer.h"
 
 
-constexpr int kMax_candidates = 2500;
-constexpr int kLDPC_iterations = 125;
+constexpr int kMax_candidates = 10000;
+constexpr int kLDPC_iterations = 25;
 
 constexpr int kMax_decoded_messages = 100;
 constexpr int kMax_message_length = 40;

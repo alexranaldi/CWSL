@@ -104,7 +104,7 @@ void extract_power(const std::array<double, num_samples>& signal, int num_blocks
 	std::array<double, nfft> window1;
 
 	for (int i = 0; i < nfft; ++i) {
-		window1[i] = cosine4_i<double>(i, nfft);
+		window1[i] = blackman_harris_i<double>(i, nfft);
 	}
 
     std::array<double, nfft / 2 + 1> window2;

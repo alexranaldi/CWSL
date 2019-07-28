@@ -20,6 +20,7 @@
 #include <atomic>
 #include <ctime>
 #include <iomanip>
+#include <fstream>
 
 #include "../Utils/SharedMemory.h"
 
@@ -53,6 +54,10 @@ int SF = 16;
 
 int SMNumber = -1;
 
+std::ofstream logFile;
+std::string logFileName;
+
+
 std::string createSharedMemName(const int bandIndex) {
 	// create name of shared memory
 	std::string Name = gPreSM + std::to_string(bandIndex) + gPostSM;
@@ -79,6 +84,8 @@ void waitForTime() {
 	
 void doDecodeFT8(decode_audio_buffer_t<double, num_samples>& decode_audio_buffer) {
 	std::cout << "Decoding..." << std::endl;
+
+    logFile.open(logFileName, std::ofstream::out | std::ofstream::app);
 
     std::vector<uint8_t> power(num_blocks * 4 * num_bins);
 
@@ -154,8 +161,12 @@ void doDecodeFT8(decode_audio_buffer_t<double, num_samples>& decode_audio_buffer
 			// Fake WSJT-X-like output for now
 			int snr = 0;    // TODO: compute SNR
 			printf("000000 %3d %4.1f %4d ~  %s\n", cand.score, time_sec, (int)(freq_hz + 0.5f), message);
+
+            logFile << "000000" << " " << time_sec << " " << freq_hz + 0.5f << " " << message << std::endl;
 		}
 	}
+
+    logFile.close();
 
 	LOG(LOG_INFO, "Decoded %d messages\n", num_decoded);     
 
@@ -218,7 +229,7 @@ void readIQ(CSharedMemory &SM, const size_t iq_len) {
 }
 
 template <typename T, int N>
-void demodulate(SSBD<T>& ssbd, AutoScaleAF<T>& af, const size_t iq_len, const size_t decRatio) {
+void demodulate(SSBD<T>& ssbd, const size_t iq_len, const size_t decRatio) {
     // Demodulate IQ for SSB
 
     const size_t ssbd_in_size = ssbd.GetInSize();
@@ -284,6 +295,7 @@ int main(int argc, char **argv)
         std::cout << "Usage: CWSL_FT8 FreqHz Scale_factor Shared_Mem" << std::endl;
         std::cout << "    FreqHz is the frequency in Hz" << std::endl
                   << "    Scale_factor is -1 for Auto-Scaling" << std::endl
+                  << "    Log_File is the full path and filename of the log file" << std::endl
                   << "    Shared_Mem is an optional single numeric digit specifying the shared memory interface" << std::endl;
         std::cout << std::endl;           
         return EXIT_SUCCESS;
@@ -297,15 +309,19 @@ int main(int argc, char **argv)
     terminateFlag = false;
 
     // Shared Mem
-    if (argc >= 4) {
+    if (argc >= 5) {
         std::cout << "A shared memory interface was specified." << std::endl;
-        if ((sscanf(argv[3], "%d", &SMNumber) != 1)) {
+        if ((sscanf(argv[4], "%d", &SMNumber) != 1)) {
             std::cout << "Unable to deciper the specified Shared_Mem interface, so ignoring" << std::endl;
         }
         else {
             std::cout << "Using shared mem interface number: " << SMNumber << std::endl;
         }
     }
+
+    // Log File
+    logFileName.assign(argv[3]);
+    std::cout << "Log file: " << logFileName << std::endl;
 
     int64_t ssbFreq = 0;
 
@@ -391,25 +407,6 @@ int main(int argc, char **argv)
     const size_t iq_len = BIS;
 
     //
-    // Create AutoAF. Only used if SF == -1
-    //
-
-    const double headroomdB = 18;
-    const double windowdB = 22;
-    const size_t numSampBeforeAfInc = Wave_SR * 300; // 300s of samples
-	const double clipVal = static_cast<double>(std::pow(2, BITS_PER_SAMPLE - 1) - 1);
-
-    AutoScaleAF<double> af(headroomdB, windowdB, clipVal, numSampBeforeAfInc);
-    if (-1 == SF) {
-        double autoAfhi = 0;
-        double autoAflo = 0;
-        af.getThresholds(autoAfhi, autoAflo);
-        std::cout << "AutoAF ideal headroom [max,min] from clip: [" << autoAfhi << " dB, " << autoAflo << " dB]" << std::endl;
-        std::cout << std::endl << "Press H to enable/disable hold of scale factor" << std::endl;
-    }
-    holdScaleFactor = false;
-
-    //
     // Prepare circular buffers
     // 
 
@@ -437,7 +434,7 @@ int main(int argc, char **argv)
     std::cout << "Creating receiver thread..." << std::endl;
     std::thread iqThread = std::thread(readIQ, std::ref(SM), BIS);
     std::cout << "Creating SSB Demodulator thread..." << std::endl;
-    std::thread demodThread = std::thread(&demodulate<double,num_samples>, std::ref(ssbd),  std::ref(af), BIS, decRatio);
+    std::thread demodThread = std::thread(&demodulate<double,num_samples>, std::ref(ssbd), BIS, decRatio);
     std::cout << "Creating samplemanager thread..." << std::endl;
     std::thread sampleManagerThread = std::thread(&sampleManager);
 	std::cout << "Creating decoder thread..." << std::endl;
